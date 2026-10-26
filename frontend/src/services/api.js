@@ -4,9 +4,6 @@ const API_BASE = (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.re
 
 const apiClient = axios.create({
   baseURL: API_BASE,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
 
 // Request interceptor to attach JWT token
@@ -54,9 +51,7 @@ export const projectsAPI = {
 export const papersAPI = {
   list: (params) => apiClient.get('/papers', { params }),
   get: (id) => apiClient.get(`/papers/${id}`),
-  upload: (formData) => apiClient.post('/papers/upload', formData, {
-    headers: { 'Content-Type': undefined },
-  }),
+  upload: (formData) => apiClient.post('/papers/upload', formData),
   importAcademic: (data) => apiClient.post('/papers/import-academic', data),
   toggleFavorite: (id) => apiClient.put(`/papers/${id}/favorite`),
   delete: (id) => apiClient.delete(`/papers/${id}`),

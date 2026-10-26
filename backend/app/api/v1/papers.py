@@ -85,16 +85,18 @@ async def upload_paper(
         safe_name = f"{paper_id}_{safe_filename}"
         file_path = os.path.join(papers_dir, safe_name)
 
+        # Read uploaded content asynchronously
+        content = await file.read()
+        file_size = len(content)
+
         # Save file with fallback
         try:
             with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
+                buffer.write(content)
         except Exception:
             file_path = os.path.join("/tmp", safe_name)
             with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-
-        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 1024
+                buffer.write(content)
         clean_title = title.strip() if title and title.strip() else file.filename.replace(".pdf", "").replace("_", " ").title()
 
         paper_doc = {
