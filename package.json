@@ -1,0 +1,23 @@
+{
+  "name": "research-paper-assist",
+  "version": "1.0.0",
+  "description": "ResearchAssist AI - Intelligent Research Paper Analysis & Recommendation System",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "start:backend": "uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload",
+    "test:backend": "pytest backend/tests/test_api.py -v"
+  },
+  "keywords": [
+    "research",
+    "ai",
+    "rag",
+    "arxiv",
+    "fastapi",
+    "react",
+    "chromadb"
+  ],
+  "author": "",
+  "license": "MIT"
+}
