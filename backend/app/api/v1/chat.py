@@ -1,0 +1,123 @@
+import uuid
+from datetime import datetime
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException
+from backend.app.schemas.schemas import ChatRequest, ConversationOut, ChatMessage
+from backend.app.core.security import get_current_user
+from backend.app.core.database import get_conversations_col, get_papers_col
+from backend.app.services.retrieval.vector_store import vector_store
+from backend.app.services.llm.engine import llm_engine
+
+router = APIRouter(prefix="/chat", tags=["AI Research Chat"])
+
+@router.get("/conversations", response_model=List[ConversationOut])
+async def list_conversations(
+    paper_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    col = get_conversations_col()
+    query = {"user_id": current_user["_id"]}
+    if paper_id:
+        query["paper_id"] = paper_id
+    cursor = col.find(query).sort("created_at", -1)
+    return await cursor.to_list(length=50)
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationOut)
+async def get_conversation(
+    conversation_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    col = get_conversations_col()
+    conv = await col.find_one({"_id": conversation_id, "user_id": current_user["_id"]})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conv
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    col = get_conversations_col()
+    res = await col.delete_one({"_id": conversation_id, "user_id": current_user["_id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"message": "Conversation deleted successfully"}
+
+@router.post("/message")
+async def send_chat_message(
+    req: ChatRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    uid = current_user["_id"]
+    col = get_conversations_col()
+    papers_col = get_papers_col()
+
+    # 1. Retrieve or create conversation
+    conv = None
+    if req.conversation_id:
+        conv = await col.find_one({"_id": req.conversation_id, "user_id": uid})
+
+    if not conv:
+        conv_id = req.conversation_id or f"conv-{uuid.uuid4().hex[:12]}"
+        title = req.message[:45] + ("..." if len(req.message) > 45 else "")
+        conv = {
+            "_id": conv_id,
+            "user_id": uid,
+            "title": title,
+            "paper_id": req.paper_id,
+            "messages": [],
+            "created_at": datetime.utcnow().isoformat()
+        }
+        await col.insert_one(conv)
+    else:
+        conv_id = conv["_id"]
+
+    # 2. Append user message
+    user_msg = {
+        "role": "user",
+        "content": req.message,
+        "citations": [],
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+    # 3. Perform grounded vector search
+    target_paper_id = req.paper_id
+    selected_ids = req.selected_paper_ids or []
+    if target_paper_id and target_paper_id not in selected_ids:
+        selected_ids.append(target_paper_id)
+
+    retrieved_chunks = vector_store.search(
+        user_id=uid,
+        query=req.message,
+        paper_id=target_paper_id,
+        selected_paper_ids=selected_ids,
+        top_k=4
+    )
+
+    # 4. Generate grounded RAG answer with citations
+    answer, citations = await llm_engine.generate_rag_response(
+        query=req.message,
+        retrieved_chunks=retrieved_chunks
+    )
+
+    assistant_msg = {
+        "role": "assistant",
+        "content": answer,
+        "citations": citations,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+    # 5. Persist updated messages
+    updated_messages = conv.get("messages", []) + [user_msg, assistant_msg]
+    await col.update_one(
+        {"_id": conv_id},
+        {"$set": {"messages": updated_messages, "updated_at": datetime.utcnow().isoformat()}}
+    )
+
+    return {
+        "conversation_id": conv_id,
+        "user_message": user_msg,
+        "assistant_message": assistant_msg,
+        "all_messages": updated_messages
+    }

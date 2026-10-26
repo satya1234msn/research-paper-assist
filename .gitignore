@@ -1,0 +1,22 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Local Storage & DB
+data/storage/papers/*
+!data/storage/papers/.gitkeep
+data/storage/exports/*
+!data/storage/exports/.gitkeep
+data/chromadb/
+data/db/
+
+# Environment
+.env
