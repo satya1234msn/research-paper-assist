@@ -19,7 +19,11 @@ class ExportService:
         safe_title = "".join(c for c in title if c.isalnum() or c in (" ", "-", "_")).strip()[:40]
         file_name = f"{safe_title}_{file_id}.{format_clean}"
         exports_dir = os.path.join(settings.STORAGE_DIR, "exports")
-        os.makedirs(exports_dir, exist_ok=True)
+        try:
+            os.makedirs(exports_dir, exist_ok=True)
+        except Exception:
+            exports_dir = "/tmp/data/storage/exports"
+            os.makedirs(exports_dir, exist_ok=True)
         file_path = os.path.join(exports_dir, file_name)
 
         if format_clean == "txt":

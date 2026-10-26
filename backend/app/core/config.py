@@ -1,9 +1,21 @@
 import os
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from typing import List
 
-is_vercel = bool(os.getenv("VERCEL"))
-base_dir = "/tmp" if is_vercel else "."
+def is_running_serverless() -> bool:
+    if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME") or os.getenv("VERCEL_ENV"):
+        return True
+    try:
+        test_file = "./.write_test_tmp"
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+        return False
+    except Exception:
+        return True
+
+base_dir = "/tmp" if is_running_serverless() else "."
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ResearchAssist AI"
@@ -19,9 +31,9 @@ class Settings(BaseSettings):
     MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "research_assist_db")
     
     # File Storage
-    STORAGE_DIR: str = os.getenv("STORAGE_DIR", os.path.join(base_dir, "data", "storage"))
-    CHROMADB_DIR: str = os.getenv("CHROMADB_DIR", os.path.join(base_dir, "data", "chromadb"))
-    DB_DIR: str = os.getenv("DB_DIR", os.path.join(base_dir, "data", "db"))
+    STORAGE_DIR: str = os.path.join(base_dir, "data", "storage")
+    CHROMADB_DIR: str = os.path.join(base_dir, "data", "chromadb")
+    DB_DIR: str = os.path.join(base_dir, "data", "db")
     
     # LLM Settings
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
@@ -42,6 +54,14 @@ class Settings(BaseSettings):
         env_file = ".env"
         extra = "ignore"
 
+    @model_validator(mode='after')
+    def enforce_safe_storage_directories(self):
+        if is_running_serverless():
+            self.STORAGE_DIR = "/tmp/data/storage"
+            self.CHROMADB_DIR = "/tmp/data/chromadb"
+            self.DB_DIR = "/tmp/data/db"
+        return self
+
 settings = Settings()
 
 # Ensure data directories exist
@@ -53,3 +73,4 @@ try:
     os.makedirs(settings.DB_DIR, exist_ok=True)
 except Exception as e:
     print(f"Directory creation note: {e}")
+

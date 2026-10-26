@@ -38,6 +38,7 @@ class AcademicVectorStore:
 
     def _save_fallback(self):
         try:
+            os.makedirs(os.path.dirname(self._fallback_path), exist_ok=True)
             with open(self._fallback_path, "w", encoding="utf-8") as f:
                 json.dump(self._fallback_store, f)
         except Exception as e:

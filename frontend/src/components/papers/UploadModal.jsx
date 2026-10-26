@@ -99,7 +99,14 @@ export const UploadModal = ({ isOpen, onClose, onUploadComplete }) => {
     } catch (err) {
       console.error('Upload failed:', err);
       setIsUploading(false);
-      setError(err.response?.data?.detail || 'Failed to upload paper. Please try again.');
+      const detail = err.response?.data?.detail;
+      if (typeof detail === 'string') {
+        setError(detail);
+      } else if (Array.isArray(detail)) {
+        setError(detail.map(d => (typeof d === 'string' ? d : d.msg || JSON.stringify(d))).join(', '));
+      } else {
+        setError(err.response?.data?.message || err.message || 'Failed to upload paper. Please try again.');
+      }
     }
   };
 

@@ -55,7 +55,7 @@ export const papersAPI = {
   list: (params) => apiClient.get('/papers', { params }),
   get: (id) => apiClient.get(`/papers/${id}`),
   upload: (formData) => apiClient.post('/papers/upload', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
+    headers: { 'Content-Type': undefined },
   }),
   importAcademic: (data) => apiClient.post('/papers/import-academic', data),
   toggleFavorite: (id) => apiClient.put(`/papers/${id}/favorite`),
