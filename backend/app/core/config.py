@@ -2,6 +2,9 @@ import os
 from pydantic_settings import BaseSettings
 from typing import List
 
+is_vercel = bool(os.getenv("VERCEL"))
+base_dir = "/tmp" if is_vercel else "."
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ResearchAssist AI"
     API_V1_STR: str = "/api/v1"
@@ -16,8 +19,9 @@ class Settings(BaseSettings):
     MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "research_assist_db")
     
     # File Storage
-    STORAGE_DIR: str = os.getenv("STORAGE_DIR", "./data/storage")
-    CHROMADB_DIR: str = os.getenv("CHROMADB_DIR", "./data/chromadb")
+    STORAGE_DIR: str = os.getenv("STORAGE_DIR", os.path.join(base_dir, "data", "storage"))
+    CHROMADB_DIR: str = os.getenv("CHROMADB_DIR", os.path.join(base_dir, "data", "chromadb"))
+    DB_DIR: str = os.getenv("DB_DIR", os.path.join(base_dir, "data", "db"))
     
     # LLM Settings
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
@@ -41,8 +45,11 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # Ensure data directories exist
-os.makedirs(settings.STORAGE_DIR, exist_ok=True)
-os.makedirs(settings.CHROMADB_DIR, exist_ok=True)
-os.makedirs(os.path.join(settings.STORAGE_DIR, "papers"), exist_ok=True)
-os.makedirs(os.path.join(settings.STORAGE_DIR, "exports"), exist_ok=True)
-os.makedirs("./data/db", exist_ok=True)
+try:
+    os.makedirs(settings.STORAGE_DIR, exist_ok=True)
+    os.makedirs(settings.CHROMADB_DIR, exist_ok=True)
+    os.makedirs(os.path.join(settings.STORAGE_DIR, "papers"), exist_ok=True)
+    os.makedirs(os.path.join(settings.STORAGE_DIR, "exports"), exist_ok=True)
+    os.makedirs(settings.DB_DIR, exist_ok=True)
+except Exception as e:
+    print(f"Directory creation note: {e}")

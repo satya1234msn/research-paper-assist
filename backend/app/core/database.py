@@ -250,8 +250,11 @@ class DatabaseManager:
             return self.db[name]
         
         if name not in self._collections:
-            db_dir = "./data/db"
-            os.makedirs(db_dir, exist_ok=True)
+            db_dir = settings.DB_DIR
+            try:
+                os.makedirs(db_dir, exist_ok=True)
+            except Exception:
+                pass
             path = os.path.join(db_dir, f"{name}.json")
             col = LocalCollection(name, path)
             # Preload synchronously in background
