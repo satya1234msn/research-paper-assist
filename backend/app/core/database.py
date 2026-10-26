@@ -301,10 +301,11 @@ class ResilientCollectionProxy:
     async def find_one(self, *args, **kwargs):
         if self.mgr.is_mongo_active():
             try:
-                return await self.mgr.db[self.name].find_one(*args, **kwargs)
+                res = await self.mgr.db[self.name].find_one(*args, **kwargs)
+                if res is not None:
+                    return res
             except Exception as e:
-                print(f"MongoDB find_one error on '{self.name}': {e}. Using local store.")
-                self.mgr.mark_mongo_unhealthy()
+                print(f"MongoDB find_one notice on '{self.name}': {e}. Checking local store.")
         return await self._get_local().find_one(*args, **kwargs)
 
     def find(self, *args, **kwargs):
@@ -313,53 +314,56 @@ class ResilientCollectionProxy:
             try:
                 motor_cur = self.mgr.db[self.name].find(*args, **kwargs)
             except Exception as e:
-                print(f"MongoDB find error on '{self.name}': {e}. Using local store.")
-                self.mgr.mark_mongo_unhealthy()
+                print(f"MongoDB find notice on '{self.name}': {e}. Using local store.")
         return ResilientCursor(motor_cur, lambda: self._get_local().find(*args, **kwargs))
 
     async def insert_one(self, *args, **kwargs):
+        # Always insert into local fallback first so data is guaranteed saved locally
+        local_res = await self._get_local().insert_one(*args, **kwargs)
         if self.mgr.is_mongo_active():
             try:
-                return await self.mgr.db[self.name].insert_one(*args, **kwargs)
+                mongo_res = await self.mgr.db[self.name].insert_one(*args, **kwargs)
+                return mongo_res
             except Exception as e:
-                print(f"MongoDB insert_one error on '{self.name}': {e}. Using local store.")
-                self.mgr.mark_mongo_unhealthy()
-        return await self._get_local().insert_one(*args, **kwargs)
+                print(f"MongoDB insert_one notice on '{self.name}': {e}. Saved to local store.")
+        return local_res
 
     async def update_one(self, *args, **kwargs):
+        local_res = await self._get_local().update_one(*args, **kwargs)
         if self.mgr.is_mongo_active():
             try:
-                return await self.mgr.db[self.name].update_one(*args, **kwargs)
+                mongo_res = await self.mgr.db[self.name].update_one(*args, **kwargs)
+                return mongo_res
             except Exception as e:
-                print(f"MongoDB update_one error on '{self.name}': {e}. Using local store.")
-                self.mgr.mark_mongo_unhealthy()
-        return await self._get_local().update_one(*args, **kwargs)
+                print(f"MongoDB update_one notice on '{self.name}': {e}. Updated local store.")
+        return local_res
 
     async def delete_one(self, *args, **kwargs):
+        local_res = await self._get_local().delete_one(*args, **kwargs)
         if self.mgr.is_mongo_active():
             try:
-                return await self.mgr.db[self.name].delete_one(*args, **kwargs)
+                mongo_res = await self.mgr.db[self.name].delete_one(*args, **kwargs)
+                return mongo_res
             except Exception as e:
-                print(f"MongoDB delete_one error on '{self.name}': {e}. Using local store.")
-                self.mgr.mark_mongo_unhealthy()
-        return await self._get_local().delete_one(*args, **kwargs)
+                print(f"MongoDB delete_one notice on '{self.name}': {e}. Deleted from local store.")
+        return local_res
 
     async def delete_many(self, *args, **kwargs):
+        local_res = await self._get_local().delete_many(*args, **kwargs)
         if self.mgr.is_mongo_active():
             try:
-                return await self.mgr.db[self.name].delete_many(*args, **kwargs)
+                mongo_res = await self.mgr.db[self.name].delete_many(*args, **kwargs)
+                return mongo_res
             except Exception as e:
-                print(f"MongoDB delete_many error on '{self.name}': {e}. Using local store.")
-                self.mgr.mark_mongo_unhealthy()
-        return await self._get_local().delete_many(*args, **kwargs)
+                print(f"MongoDB delete_many notice on '{self.name}': {e}. Deleted from local store.")
+        return local_res
 
     async def count_documents(self, *args, **kwargs):
         if self.mgr.is_mongo_active():
             try:
                 return await self.mgr.db[self.name].count_documents(*args, **kwargs)
             except Exception as e:
-                print(f"MongoDB count error on '{self.name}': {e}. Using local store.")
-                self.mgr.mark_mongo_unhealthy()
+                print(f"MongoDB count notice on '{self.name}': {e}. Using local store.")
         return await self._get_local().count_documents(*args, **kwargs)
 
 
@@ -370,9 +374,7 @@ class DatabaseManager:
         self._is_mongo = False
         self._attempted = False
         self._local_collections: Dict[str, LocalCollection] = {}
-
-    def mark_mongo_unhealthy(self):
-        self._is_mongo = False
+        self.last_error = None
 
     def is_mongo_active(self) -> bool:
         if not self._attempted:
@@ -388,29 +390,38 @@ class DatabaseManager:
 
         # Check for unreplaced password placeholder
         if "<" in url and ">" in url:
-            print("NOTICE: MONGODB_URL contains placeholder '<...>'. Please replace it with your actual MongoDB password. Falling back to persistent storage.")
+            self.last_error = "MONGODB_URL contains placeholder '<...>'. Set your actual MongoDB password in environment variables."
+            print(f"NOTICE: {self.last_error}")
             self._is_mongo = False
             return
 
         try:
             from motor.motor_asyncio import AsyncIOMotorClient
-            client = AsyncIOMotorClient(url, serverSelectionTimeoutMS=2500)
+            client = AsyncIOMotorClient(
+                url,
+                serverSelectionTimeoutMS=10000,
+                connectTimeoutMS=10000,
+                socketTimeoutMS=20000
+            )
             self.db = client[settings.MONGODB_DB_NAME]
             self._is_mongo = True
             print(f"Configured MongoDB Atlas client for database: {settings.MONGODB_DB_NAME}")
         except Exception as e:
             self._is_mongo = False
+            self.last_error = str(e)
             print(f"MongoDB initialization notice ({e}). Using persistent local document database.")
 
     async def connect(self):
         self._init_mongo()
-        if self._is_mongo and self.db is not None:
+        if self.db is not None:
             try:
                 await self.db.command("ping")
+                self._is_mongo = True
+                self.last_error = None
                 print("MongoDB Atlas connection verified successfully.")
             except Exception as e:
-                print(f"MongoDB Atlas ping check notice: {e}. Queries will fallback gracefully if authentication fails.")
-                self._is_mongo = False
+                self.last_error = str(e)
+                print(f"MongoDB Atlas ping notice ({e}). Live operations will continue retrying.")
 
     def get_collection(self, name: str) -> ResilientCollectionProxy:
         return ResilientCollectionProxy(name, self)

@@ -222,10 +222,13 @@ app.include_router(jobs_router, prefix=v1_prefix)
 
 @app.get("/api/health")
 async def health_check():
+    is_mongo = db_manager.is_mongo_active()
     return {
         "status": "healthy",
         "service": settings.PROJECT_NAME,
-        "database": "connected",
+        "database": "mongodb_atlas" if is_mongo else "local_fallback",
+        "mongo_connected": is_mongo,
+        "mongo_notice": db_manager.last_error or ("Active connection" if is_mongo else "Local persistent storage active"),
         "version": "1.0.0"
     }
 
