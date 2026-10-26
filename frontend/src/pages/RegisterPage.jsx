@@ -28,7 +28,14 @@ export const RegisterPage = () => {
       navigate('/dashboard');
     } catch (err) {
       console.error(err);
-      setError(err.response?.data?.detail || 'Registration failed. Please check your details.');
+      const detail = err.response?.data?.detail;
+      if (typeof detail === 'string') {
+        setError(detail);
+      } else if (Array.isArray(detail)) {
+        setError(detail.map(d => (typeof d === 'string' ? d : d.msg || JSON.stringify(d))).join(', '));
+      } else {
+        setError(err.response?.data?.message || err.message || 'Registration failed. Please check your details.');
+      }
     } finally {
       setLoading(false);
     }

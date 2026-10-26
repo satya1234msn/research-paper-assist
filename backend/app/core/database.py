@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import uuid
+import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from backend.app.core.config import settings
@@ -11,27 +12,25 @@ class LocalCollection:
     def __init__(self, name: str, filepath: str):
         self.name = name
         self.filepath = filepath
-        self._lock = asyncio.Lock()
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._loaded = False
 
     async def _ensure_loaded(self):
         if not self._loaded:
-            async with self._lock:
-                if not self._loaded:
-                    if os.path.exists(self.filepath):
-                        try:
-                            with open(self.filepath, "r", encoding="utf-8") as f:
-                                data = json.load(f)
-                                self._cache = {doc["_id"]: doc for doc in data if "_id" in doc}
-                        except Exception:
-                            self._cache = {}
-                    else:
-                        self._cache = {}
-                    self._loaded = True
+            if os.path.exists(self.filepath):
+                try:
+                    with open(self.filepath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        self._cache = {doc["_id"]: doc for doc in data if isinstance(doc, dict) and "_id" in doc}
+                except Exception:
+                    self._cache = {}
+            else:
+                self._cache = {}
+            self._loaded = True
 
     async def _persist(self):
         try:
+            os.makedirs(os.path.dirname(self.filepath), exist_ok=True)
             with open(self.filepath, "w", encoding="utf-8") as f:
                 json.dump(list(self._cache.values()), f, default=str, indent=2)
         except Exception as e:
@@ -52,13 +51,11 @@ class LocalCollection:
 
             doc_val = doc.get(k)
             if isinstance(v, dict):
-                # Operators like $in, $ne, $regex, etc.
                 if "$in" in v and doc_val not in v["$in"]:
                     return False
                 if "$ne" in v and doc_val == v["$ne"]:
                     return False
                 if "$regex" in v:
-                    import re
                     pattern = v["$regex"]
                     ignore_case = v.get("$options", "") == "i"
                     if not re.search(pattern, str(doc_val or ""), re.IGNORECASE if ignore_case else 0):
@@ -133,7 +130,6 @@ class LocalCollection:
 
     def find(self, query: Dict[str, Any] = None) -> Cursor:
         query = query or {}
-        # Since find() is synchronous returning a cursor, docs will be resolved
         matched = [d for d in self._cache.values() if self._matches(d, query)]
         return self.Cursor(matched)
 
@@ -147,9 +143,8 @@ class LocalCollection:
         if "updated_at" not in doc_copy:
             doc_copy["updated_at"] = datetime.utcnow().isoformat()
 
-        async with self._lock:
-            self._cache[doc_copy["_id"]] = doc_copy
-            await self._persist()
+        self._cache[doc_copy["_id"]] = doc_copy
+        await self._persist()
 
         class InsertResult:
             inserted_id = doc_copy["_id"]
@@ -169,15 +164,14 @@ class LocalCollection:
                 modified_count = 0
             return MockUpdate()
 
-        async with self._lock:
-            if "$set" in update:
-                for k, v in update["$set"].items():
-                    target_doc[k] = v
-            if "$inc" in update:
-                for k, v in update["$inc"].items():
-                    target_doc[k] = target_doc.get(k, 0) + v
-            target_doc["updated_at"] = datetime.utcnow().isoformat()
-            await self._persist()
+        if "$set" in update:
+            for k, v in update["$set"].items():
+                target_doc[k] = v
+        if "$inc" in update:
+            for k, v in update["$inc"].items():
+                target_doc[k] = target_doc.get(k, 0) + v
+        target_doc["updated_at"] = datetime.utcnow().isoformat()
+        await self._persist()
 
         class MockUpdateResult:
             matched_count = 1
@@ -193,12 +187,10 @@ class LocalCollection:
                 break
 
         deleted = 0
-        if target_id:
-            async with self._lock:
-                if target_id in self._cache:
-                    del self._cache[target_id]
-                    deleted = 1
-                    await self._persist()
+        if target_id and target_id in self._cache:
+            del self._cache[target_id]
+            deleted = 1
+            await self._persist()
 
         class MockDeleteResult:
             deleted_count = deleted
@@ -209,12 +201,11 @@ class LocalCollection:
         to_delete = [doc_id for doc_id, doc in self._cache.items() if self._matches(doc, query)]
         deleted = 0
         if to_delete:
-            async with self._lock:
-                for doc_id in to_delete:
-                    if doc_id in self._cache:
-                        del self._cache[doc_id]
-                        deleted += 1
-                await self._persist()
+            for doc_id in to_delete:
+                if doc_id in self._cache:
+                    del self._cache[doc_id]
+                    deleted += 1
+            await self._persist()
         class MockDeleteResult:
             deleted_count = deleted
         return MockDeleteResult()
@@ -225,42 +216,204 @@ class LocalCollection:
         return sum(1 for doc in self._cache.values() if self._matches(doc, query))
 
 
-class DatabaseManager:
-    """Manages connections to MongoDB or local async document DB fallback."""
-    def __init__(self):
-        self.db = None
-        self._collections: Dict[str, Any] = {}
-        self._is_mongo = False
+class ResilientCursor:
+    """Cursor that wraps Motor cursor and gracefully fails over to LocalCollection cursor."""
+    def __init__(self, motor_cursor, local_cursor_getter):
+        self.motor_cursor = motor_cursor
+        self.local_cursor_getter = local_cursor_getter
+        self._sort_args = None
+        self._skip_val = None
+        self._limit_val = None
 
-    async def connect(self):
-        # Try connecting to live MongoDB if available
-        try:
-            from motor.motor_asyncio import AsyncIOMotorClient
-            client = AsyncIOMotorClient(settings.MONGODB_URL, serverSelectionTimeoutMS=1000)
-            await client.server_info()
-            self.db = client[settings.MONGODB_DB_NAME]
-            self._is_mongo = True
-            print(f"Connected to MongoDB at {settings.MONGODB_URL}")
-        except Exception:
-            self._is_mongo = False
-            print("MongoDB not reachable, utilizing persistent local document database at ./data/db/")
-
-    def get_collection(self, name: str):
-        if self._is_mongo and self.db is not None:
-            return self.db[name]
-        
-        if name not in self._collections:
-            db_dir = settings.DB_DIR
+    def sort(self, *args, **kwargs):
+        if self.motor_cursor is not None:
             try:
-                os.makedirs(db_dir, exist_ok=True)
+                self.motor_cursor = self.motor_cursor.sort(*args, **kwargs)
             except Exception:
                 pass
-            path = os.path.join(db_dir, f"{name}.json")
-            col = LocalCollection(name, path)
-            # Preload synchronously in background
-            asyncio.create_task(col._ensure_loaded())
-            self._collections[name] = col
-        return self._collections[name]
+        self._sort_args = (args, kwargs)
+        return self
+
+    def skip(self, count: int):
+        if self.motor_cursor is not None:
+            try:
+                self.motor_cursor = self.motor_cursor.skip(count)
+            except Exception:
+                pass
+        self._skip_val = count
+        return self
+
+    def limit(self, count: int):
+        if self.motor_cursor is not None:
+            try:
+                self.motor_cursor = self.motor_cursor.limit(count)
+            except Exception:
+                pass
+        self._limit_val = count
+        return self
+
+    def _get_fallback_cursor(self):
+        cur = self.local_cursor_getter()
+        if self._sort_args:
+            cur.sort(*self._sort_args[0], **self._sort_args[1])
+        if self._skip_val is not None:
+            cur.skip(self._skip_val)
+        if self._limit_val is not None:
+            cur.limit(self._limit_val)
+        return cur
+
+    async def to_list(self, length: Optional[int] = None):
+        if self.motor_cursor is not None:
+            try:
+                return await self.motor_cursor.to_list(length=length)
+            except Exception as e:
+                print(f"MongoDB cursor.to_list error: {e}. Falling back to local store.")
+        return await self._get_fallback_cursor().to_list(length=length)
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        if self.motor_cursor is not None:
+            try:
+                async for doc in self.motor_cursor:
+                    yield doc
+                return
+            except Exception as e:
+                print(f"MongoDB cursor iteration error: {e}. Falling back to local store.")
+        fallback = self._get_fallback_cursor()
+        async for doc in fallback:
+            yield doc
+
+
+class ResilientCollectionProxy:
+    """Smart collection proxy that seamlessly executes on Motor (MongoDB) or falls back to LocalCollection on errors."""
+    def __init__(self, name: str, db_manager: 'DatabaseManager'):
+        self.name = name
+        self.mgr = db_manager
+
+    def _get_local(self) -> LocalCollection:
+        if self.name not in self.mgr._local_collections:
+            path = os.path.join(settings.DB_DIR, f"{self.name}.json")
+            self.mgr._local_collections[self.name] = LocalCollection(self.name, path)
+        return self.mgr._local_collections[self.name]
+
+    async def find_one(self, *args, **kwargs):
+        if self.mgr.is_mongo_active():
+            try:
+                return await self.mgr.db[self.name].find_one(*args, **kwargs)
+            except Exception as e:
+                print(f"MongoDB find_one error on '{self.name}': {e}. Using local store.")
+                self.mgr.mark_mongo_unhealthy()
+        return await self._get_local().find_one(*args, **kwargs)
+
+    def find(self, *args, **kwargs):
+        motor_cur = None
+        if self.mgr.is_mongo_active():
+            try:
+                motor_cur = self.mgr.db[self.name].find(*args, **kwargs)
+            except Exception as e:
+                print(f"MongoDB find error on '{self.name}': {e}. Using local store.")
+                self.mgr.mark_mongo_unhealthy()
+        return ResilientCursor(motor_cur, lambda: self._get_local().find(*args, **kwargs))
+
+    async def insert_one(self, *args, **kwargs):
+        if self.mgr.is_mongo_active():
+            try:
+                return await self.mgr.db[self.name].insert_one(*args, **kwargs)
+            except Exception as e:
+                print(f"MongoDB insert_one error on '{self.name}': {e}. Using local store.")
+                self.mgr.mark_mongo_unhealthy()
+        return await self._get_local().insert_one(*args, **kwargs)
+
+    async def update_one(self, *args, **kwargs):
+        if self.mgr.is_mongo_active():
+            try:
+                return await self.mgr.db[self.name].update_one(*args, **kwargs)
+            except Exception as e:
+                print(f"MongoDB update_one error on '{self.name}': {e}. Using local store.")
+                self.mgr.mark_mongo_unhealthy()
+        return await self._get_local().update_one(*args, **kwargs)
+
+    async def delete_one(self, *args, **kwargs):
+        if self.mgr.is_mongo_active():
+            try:
+                return await self.mgr.db[self.name].delete_one(*args, **kwargs)
+            except Exception as e:
+                print(f"MongoDB delete_one error on '{self.name}': {e}. Using local store.")
+                self.mgr.mark_mongo_unhealthy()
+        return await self._get_local().delete_one(*args, **kwargs)
+
+    async def delete_many(self, *args, **kwargs):
+        if self.mgr.is_mongo_active():
+            try:
+                return await self.mgr.db[self.name].delete_many(*args, **kwargs)
+            except Exception as e:
+                print(f"MongoDB delete_many error on '{self.name}': {e}. Using local store.")
+                self.mgr.mark_mongo_unhealthy()
+        return await self._get_local().delete_many(*args, **kwargs)
+
+    async def count_documents(self, *args, **kwargs):
+        if self.mgr.is_mongo_active():
+            try:
+                return await self.mgr.db[self.name].count_documents(*args, **kwargs)
+            except Exception as e:
+                print(f"MongoDB count error on '{self.name}': {e}. Using local store.")
+                self.mgr.mark_mongo_unhealthy()
+        return await self._get_local().count_documents(*args, **kwargs)
+
+
+class DatabaseManager:
+    """Manages connections to MongoDB Atlas with lazy initialization and zero-crash local document fallback."""
+    def __init__(self):
+        self.db = None
+        self._is_mongo = False
+        self._attempted = False
+        self._local_collections: Dict[str, LocalCollection] = {}
+
+    def mark_mongo_unhealthy(self):
+        self._is_mongo = False
+
+    def is_mongo_active(self) -> bool:
+        if not self._attempted:
+            self._init_mongo()
+        return self._is_mongo and self.db is not None
+
+    def _init_mongo(self):
+        self._attempted = True
+        url = settings.MONGODB_URL
+        if not url:
+            self._is_mongo = False
+            return
+
+        # Check for unreplaced password placeholder
+        if "<" in url and ">" in url:
+            print("NOTICE: MONGODB_URL contains placeholder '<...>'. Please replace it with your actual MongoDB password. Falling back to persistent storage.")
+            self._is_mongo = False
+            return
+
+        try:
+            from motor.motor_asyncio import AsyncIOMotorClient
+            client = AsyncIOMotorClient(url, serverSelectionTimeoutMS=2500)
+            self.db = client[settings.MONGODB_DB_NAME]
+            self._is_mongo = True
+            print(f"Configured MongoDB Atlas client for database: {settings.MONGODB_DB_NAME}")
+        except Exception as e:
+            self._is_mongo = False
+            print(f"MongoDB initialization notice ({e}). Using persistent local document database.")
+
+    async def connect(self):
+        self._init_mongo()
+        if self._is_mongo and self.db is not None:
+            try:
+                await self.db.command("ping")
+                print("MongoDB Atlas connection verified successfully.")
+            except Exception as e:
+                print(f"MongoDB Atlas ping check notice: {e}. Queries will fallback gracefully if authentication fails.")
+                self._is_mongo = False
+
+    def get_collection(self, name: str) -> ResilientCollectionProxy:
+        return ResilientCollectionProxy(name, self)
 
 db_manager = DatabaseManager()
 
