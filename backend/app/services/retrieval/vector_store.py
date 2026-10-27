@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import math
 from typing import List, Dict, Any, Optional
@@ -147,29 +148,67 @@ class AcademicVectorStore:
 
         # Local vector index search
         user_chunks = self._fallback_store.get(user_id, [])
-        if not user_chunks:
-            return []
 
-        # Filter by paper_id or selected_paper_ids
-        filtered = user_chunks
+        # Gather chunks based on paper filter
+        filtered = []
         if paper_id:
-            filtered = [c for c in filtered if c["paper_id"] == paper_id]
-        elif selected_paper_ids:
-            filtered = [c for c in filtered if c["paper_id"] in selected_paper_ids]
+            filtered = [c for c in user_chunks if c.get("paper_id") == paper_id]
+            # Cross-user fallback: if user has no chunks for this paper, check all stores
+            if not filtered:
+                for uid, u_chunks in self._fallback_store.items():
+                    matches = [c for c in u_chunks if c.get("paper_id") == paper_id]
+                    if matches:
+                        filtered.extend(matches)
+                        break
+        elif selected_paper_ids and len(selected_paper_ids) > 0:
+            target_ids = set(selected_paper_ids)
+            filtered = [c for c in user_chunks if c.get("paper_id") in target_ids]
+            if not filtered:
+                for uid, u_chunks in self._fallback_store.items():
+                    matches = [c for c in u_chunks if c.get("paper_id") in target_ids]
+                    filtered.extend(matches)
+        else:
+            filtered = user_chunks
+            # Global fallback if current user has no chunks
+            if not filtered:
+                for uid, u_chunks in self._fallback_store.items():
+                    filtered.extend(u_chunks)
 
         if not filtered:
             return []
 
-        # Compute cosine similarity
-        scored = []
+        # Deduplicate chunks by id
+        dedup_dict = {}
         for c in filtered:
-            emb = c["embedding"]
-            # Cosine similarity
-            dot = sum(a * b for a, b in zip(query_embedding, emb))
-            norm1 = math.sqrt(sum(a * a for a in query_embedding))
-            norm2 = math.sqrt(sum(b * b for b in emb))
-            sim = dot / (norm1 * norm2) if norm1 > 0 and norm2 > 0 else 0.0
-            scored.append((sim, c))
+            cid = c.get("id") or f"{c.get('paper_id')}_{c.get('chunk_index')}"
+            if cid not in dedup_dict:
+                dedup_dict[cid] = c
+        candidate_chunks = list(dedup_dict.values())
+
+        # Compute hybrid score: Cosine similarity + lexical keyword boost
+        q_words = set(re.findall(r'\w+', query.lower())) - {
+            "what", "is", "the", "are", "how", "why", "in", "on", "of", "and", "to", "a",
+            "this", "that", "does", "explain", "summarize", "about", "for", "with", "an"
+        }
+
+        scored = []
+        for c in candidate_chunks:
+            emb = c.get("embedding", [])
+            sim = 0.0
+            if emb and len(emb) == len(query_embedding):
+                dot = sum(a * b for a, b in zip(query_embedding, emb))
+                norm1 = math.sqrt(sum(a * a for a in query_embedding))
+                norm2 = math.sqrt(sum(b * b for b in emb))
+                sim = dot / (norm1 * norm2) if norm1 > 0 and norm2 > 0 else 0.0
+
+            # Lexical boost
+            content_lower = c.get("content", "").lower()
+            c_words = set(re.findall(r'\w+', content_lower))
+            overlap_count = len(q_words & c_words)
+            lexical_ratio = (overlap_count / max(len(q_words), 1)) if q_words else 0.0
+
+            total_score = sim * 0.60 + lexical_ratio * 0.40
+            scored.append((total_score, c))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         top_items = scored[:top_k]
@@ -178,8 +217,8 @@ class AcademicVectorStore:
             "content": item[1]["content"],
             "paper_id": item[1]["paper_id"],
             "paper_title": item[1]["paper_title"],
-            "page_number": item[1]["page_number"],
-            "chunk_index": item[1]["chunk_index"],
+            "page_number": item[1].get("page_number", 1),
+            "chunk_index": item[1].get("chunk_index", 0),
             "score": round(item[0], 4)
         } for item in top_items]
 

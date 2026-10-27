@@ -11,6 +11,8 @@ from backend.app.core.config import settings
 from backend.app.core.database import get_papers_col, get_processing_jobs_col, get_paper_analysis_col
 from backend.app.services.retrieval.vector_store import vector_store
 from backend.app.workers.queue import background_worker
+from backend.app.services.pdf.extractor import PDFExtractor
+from backend.app.services.llm.engine import llm_engine
 
 router = APIRouter(prefix="/papers", tags=["Paper Management"])
 
@@ -207,29 +209,23 @@ async def import_academic_paper(
     )
 
     # Seed initial structured analysis
+    raw_text = f"{req.title}\n\nAbstract: {req.abstract or ''}"
+    detected_secs = PDFExtractor._detect_sections(raw_text)
+    structured = await llm_engine.analyze_paper_structure(req.title, req.abstract or "", detected_secs)
+
     analysis_col = get_paper_analysis_col()
     analysis_record = {
         "_id": f"analysis-{paper_id}",
         "paper_id": paper_id,
         "user_id": user_id,
         "abstract": req.abstract or "Literature paper abstract.",
-        "research_problem": f"Investigating methodological challenges and benchmarks in {req.title.lower()}.",
-        "objectives": [
-            f"Formalize theoretical foundation for {req.title}.",
-            "Empirically assess comparative outcomes against recognized standards."
-        ],
-        "methodology": "Rigorous analytical framing combined with multi-metric empirical verification.",
-        "key_contributions": [
-            "Formal problem characterization in peer-reviewed setting.",
-            "Replication guidelines and empirical reference data."
-        ],
-        "results": "Demonstrated consistent performance metrics aligned with publication findings.",
-        "limitations": [
-            "Evaluated under specific domain criteria and standardized assumptions."
-        ],
-        "future_work": [
-            "Cross-domain validation under heterogeneous data distributions."
-        ],
+        "research_problem": structured.get("research_problem", ""),
+        "objectives": structured.get("objectives", []),
+        "methodology": structured.get("methodology", ""),
+        "key_contributions": structured.get("key_contributions", []),
+        "results": structured.get("results", ""),
+        "limitations": structured.get("limitations", []),
+        "future_work": structured.get("future_work", []),
         "created_at": datetime.utcnow().isoformat()
     }
     await analysis_col.insert_one(analysis_record)

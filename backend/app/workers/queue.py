@@ -43,7 +43,11 @@ class BackgroundJobWorker:
             # Stage 3: Cleaning document
             await update_stage("Cleaning Document", 40)
             paper_doc = await papers_col.find_one({"_id": paper_id})
-            paper_title = paper_doc.get("title") if paper_doc else meta.get("title") or "Research Document"
+            paper_title = (paper_doc.get("title") if paper_doc else "") or ""
+            # If current title is generic or filename, replace with inferred title from PDF
+            inferred = meta.get("title") or sections.get("inferred_title")
+            if (not paper_title or paper_title.lower().endswith(".pdf") or len(paper_title) < 4) and inferred:
+                paper_title = inferred
 
             # Stage 4: Creating chunks
             await update_stage("Creating Semantic Chunks", 55)
@@ -67,11 +71,12 @@ class BackgroundJobWorker:
             structured_analysis = await llm_engine.analyze_paper_structure(paper_title, full_text, sections)
             
             # Save analysis
+            extracted_abstract = sections.get("abstract") or (paper_doc.get("abstract") if paper_doc else "") or full_text[:1200]
             analysis_record = {
                 "_id": f"analysis-{paper_id}",
                 "paper_id": paper_id,
                 "user_id": user_id,
-                "abstract": sections.get("abstract") or paper_doc.get("abstract") or full_text[:600],
+                "abstract": extracted_abstract,
                 "research_problem": structured_analysis.get("research_problem", ""),
                 "objectives": structured_analysis.get("objectives", []),
                 "methodology": structured_analysis.get("methodology", ""),
@@ -88,9 +93,10 @@ class BackgroundJobWorker:
             await papers_col.update_one(
                 {"_id": paper_id},
                 {"$set": {
+                    "title": paper_title,
                     "page_count": page_count,
                     "processing_status": "complete",
-                    "abstract": analysis_record["abstract"][:800],
+                    "abstract": extracted_abstract[:1500],
                     "updated_at": datetime.utcnow().isoformat()
                 }}
             )

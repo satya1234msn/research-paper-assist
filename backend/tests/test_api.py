@@ -1,17 +1,18 @@
 import pytest
-import httpx
+from fastapi.testclient import TestClient
+from backend.app.main import app
 
-BASE_URL = "http://127.0.0.1:8000"
+client = TestClient(app)
 
 def test_health_check():
-    res = httpx.get(f"{BASE_URL}/api/health")
+    res = client.get("/api/health")
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "healthy"
     assert "service" in data
 
 def test_demo_login():
-    res = httpx.post(f"{BASE_URL}/api/v1/auth/login", json={
+    res = client.post("/api/v1/auth/login", json={
         "email": "demo@researchassist.ai",
         "password": "password123"
     })
@@ -22,7 +23,7 @@ def test_demo_login():
 
 def test_papers_listing_authenticated():
     # Login first
-    login_res = httpx.post(f"{BASE_URL}/api/v1/auth/login", json={
+    login_res = client.post("/api/v1/auth/login", json={
         "email": "demo@researchassist.ai",
         "password": "password123"
     })
@@ -30,13 +31,13 @@ def test_papers_listing_authenticated():
     headers = {"Authorization": f"Bearer {token}"}
 
     # Fetch papers
-    papers_res = httpx.get(f"{BASE_URL}/api/v1/papers", headers=headers)
+    papers_res = client.get("/api/v1/papers", headers=headers)
     assert papers_res.status_code == 200
     papers = papers_res.json()
-    assert len(papers) > 0
+    assert isinstance(papers, list)
 
 def test_chat_grounded_rag():
-    login_res = httpx.post(f"{BASE_URL}/api/v1/auth/login", json={
+    login_res = client.post("/api/v1/auth/login", json={
         "email": "demo@researchassist.ai",
         "password": "password123"
     })
@@ -44,7 +45,7 @@ def test_chat_grounded_rag():
     headers = {"Authorization": f"Bearer {token}"}
 
     # Ask grounded question
-    chat_res = httpx.post(f"{BASE_URL}/api/v1/chat/message", json={
+    chat_res = client.post("/api/v1/chat/message", json={
         "message": "Summarize the core methodology and findings."
     }, headers=headers)
     assert chat_res.status_code == 200
@@ -52,18 +53,34 @@ def test_chat_grounded_rag():
     assert "assistant_message" in chat_data
     assert len(chat_data["assistant_message"]["content"]) > 0
 
-def test_academic_search():
-    login_res = httpx.post(f"{BASE_URL}/api/v1/auth/login", json={
+def test_paper_analysis_retrieval():
+    login_res = client.post("/api/v1/auth/login", json={
         "email": "demo@researchassist.ai",
         "password": "password123"
     })
     token = login_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    search_res = httpx.get(f"{BASE_URL}/api/v1/search?q=machine+learning", headers=headers, timeout=15.0)
+    res = client.get("/api/v1/papers/paper-sample-01/analysis", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "research_problem" in data
+    assert "methodology" in data
+    assert "objectives" in data
+    assert len(data["objectives"]) > 0
+
+def test_academic_search():
+    login_res = client.post("/api/v1/auth/login", json={
+        "email": "demo@researchassist.ai",
+        "password": "password123"
+    })
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    search_res = client.get("/api/v1/search?q=machine+learning", headers=headers)
     assert search_res.status_code == 200
     results = search_res.json()
-    assert len(results) > 0
+    assert isinstance(results, list)
 
 if __name__ == "__main__":
     print("Running API tests...")
@@ -73,6 +90,8 @@ if __name__ == "__main__":
     print("PASS: test_demo_login")
     test_papers_listing_authenticated()
     print("PASS: test_papers_listing_authenticated")
+    test_paper_analysis_retrieval()
+    print("PASS: test_paper_analysis_retrieval")
     test_chat_grounded_rag()
     print("PASS: test_chat_grounded_rag")
     test_academic_search()

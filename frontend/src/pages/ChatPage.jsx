@@ -17,6 +17,87 @@ import {
 import { chatAPI, papersAPI } from '../services/api';
 import ShinyBadge from '../components/ui/ShinyBadge';
 
+const RenderMessageContent = ({ content, citations, onCitationClick }) => {
+  if (!content) return null;
+
+  const lines = content.split('\n');
+
+  return (
+    <div className="space-y-1.5 leading-relaxed text-xs">
+      {lines.map((line, lIdx) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          return <div key={lIdx} className="h-1" />;
+        }
+
+        // Header ###
+        if (trimmed.startsWith('### ')) {
+          return (
+            <h4 key={lIdx} className="text-xs font-bold text-slate-900 mt-2 mb-1 tracking-tight">
+              {trimmed.replace(/^###\s+/, '')}
+            </h4>
+          );
+        }
+
+        // Bullet line
+        const isBullet = trimmed.startsWith('- ') || trimmed.startsWith('• ');
+        const textToFormat = isBullet ? trimmed.replace(/^[-•]\s+/, '') : line;
+
+        // Parse bold and citations
+        const parts = [];
+        let pKey = 0;
+        const tokenRegex = /(\*\*[^*]+\*\*|\[\d+\])/g;
+        let lastIndex = 0;
+        let match;
+
+        while ((match = tokenRegex.exec(textToFormat)) !== null) {
+          if (match.index > lastIndex) {
+            parts.push(<span key={pKey++}>{textToFormat.slice(lastIndex, match.index)}</span>);
+          }
+          const token = match[0];
+          if (token.startsWith('**') && token.endsWith('**')) {
+            parts.push(
+              <strong key={pKey++} className="font-semibold text-slate-900">
+                {token.slice(2, -2)}
+              </strong>
+            );
+          } else if (/^\[\d+\]$/.test(token)) {
+            const citeNum = parseInt(token.slice(1, -1), 10);
+            const targetCite = citations && citations[citeNum - 1];
+            parts.push(
+              <button
+                key={pKey++}
+                type="button"
+                onClick={() => targetCite && onCitationClick && onCitationClick([targetCite])}
+                className="inline-flex items-center px-1.5 py-0.5 mx-0.5 text-[10px] font-semibold text-blue-700 bg-blue-100 hover:bg-blue-200 rounded cursor-pointer transition-colors"
+                title={targetCite ? `${targetCite.paper_title} (Page ${targetCite.page_number})` : `Citation ${token}`}
+              >
+                {token}
+              </button>
+            );
+          }
+          lastIndex = tokenRegex.lastIndex;
+        }
+
+        if (lastIndex < textToFormat.length) {
+          parts.push(<span key={pKey++}>{textToFormat.slice(lastIndex)}</span>);
+        }
+
+        if (isBullet) {
+          return (
+            <div key={lIdx} className="flex items-start gap-2 pl-1 my-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-600 mt-1.5 shrink-0" />
+              <div className="flex-1">{parts}</div>
+            </div>
+          );
+        }
+
+        return <div key={lIdx}>{parts}</div>;
+      })}
+    </div>
+  );
+};
+
 export const ChatPage = () => {
   const [searchParams] = useSearchParams();
   const initialPaperId = searchParams.get('paperId');
@@ -291,7 +372,15 @@ export const ChatPage = () => {
                         : 'bg-slate-50 border border-slate-200 text-slate-800 rounded-bl-xs space-y-3'
                     }`}
                   >
-                    <div className="whitespace-pre-wrap">{m.content}</div>
+                    {isUser ? (
+                      <div className="whitespace-pre-wrap">{m.content}</div>
+                    ) : (
+                      <RenderMessageContent
+                        content={m.content}
+                        citations={m.citations}
+                        onCitationClick={setActiveEvidence}
+                      />
+                    )}
 
                     {/* Citations Tag List */}
                     {!isUser && m.citations && m.citations.length > 0 && (
