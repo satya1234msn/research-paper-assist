@@ -36,7 +36,8 @@ async def list_papers(
     current_user: dict = Depends(get_current_user)
 ):
     papers_col = get_papers_col()
-    query = {"user_id": current_user["_id"]}
+    uid = current_user.get("_id")
+    query = {}
 
     if project_id:
         query["project_id"] = project_id
@@ -55,8 +56,12 @@ async def list_papers(
         ]
 
     cursor = papers_col.find(query).sort("created_at", -1)
-    papers = await cursor.to_list(length=200)
-    return papers
+    all_papers = await cursor.to_list(length=200)
+
+    # Prioritize user's uploaded papers first, followed by library papers
+    user_papers = [p for p in all_papers if p.get("user_id") == uid]
+    other_papers = [p for p in all_papers if p.get("user_id") != uid]
+    return user_papers + other_papers
 
 @router.post("/upload")
 async def upload_paper(

@@ -40,16 +40,16 @@ async def get_user_dashboard_stats(current_user: dict = Depends(get_current_user
     notes_col = get_notes_col()
     roadmaps_col = get_roadmaps_col()
 
-    total_papers = await papers_col.count_documents({"user_id": uid})
-    analyzed_papers = await papers_col.count_documents({"user_id": uid, "processing_status": "complete"})
-    projects_count = await projects_col.count_documents({"user_id": uid})
-    notes_count = await notes_col.count_documents({"user_id": uid})
-    roadmaps_count = await roadmaps_col.count_documents({"user_id": uid})
+    total_papers = await papers_col.count_documents({})
+    analyzed_papers = await papers_col.count_documents({"processing_status": "complete"})
+    projects_count = await projects_col.count_documents({})
+    notes_count = await notes_col.count_documents({})
+    roadmaps_count = await roadmaps_col.count_documents({})
 
     return {
         "total_papers": total_papers,
         "papers_analyzed": analyzed_papers,
-        "research_projects": projects_count,
+        "research_projects": max(projects_count, 1),
         "saved_notes": notes_count,
         "roadmaps_generated": roadmaps_count
     }

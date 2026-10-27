@@ -101,37 +101,110 @@ async def seed_initial_research_data():
             }
         ]
 
+        sample_analyses = {
+            "paper-sample-01": {
+                "research_problem": "Recurrent sequence transduction models process tokens sequentially, precluding parallelization across training examples and suffering from vanishing gradients over long-range dependencies.",
+                "objectives": [
+                    "Eliminate sequential recurrence and convolutions entirely from the sequence model.",
+                    "Establish constant computational path length between arbitrary token positions.",
+                    "Significantly accelerate multi-GPU training parallelization."
+                ],
+                "methodology": "Multi-head scaled dot-product self-attention encoder-decoder architecture with sinusoidal positional encodings and layer normalization.",
+                "key_contributions": [
+                    "Introduced the Transformer architecture without recurrent or convolutional layers.",
+                    "Formulated Multi-Head Attention to attend to information from different representation subspaces.",
+                    "Established new state-of-the-art BLEU score of 28.4 on WMT 2014 English-to-German."
+                ],
+                "results": "Achieved 28.4 BLEU on WMT 2014 En-De and 41.8 BLEU on En-Fr, establishing new SOTA while training in 3.5 days on 8 P100 GPUs.",
+                "limitations": [
+                    "Quadratic O(N^2) time and memory complexity with respect to sequence length N.",
+                    "Strict input context window limits processing of long books or dense scientific repositories.",
+                    "Requires massive pretraining datasets due to lack of convolutional inductive bias."
+                ],
+                "future_work": [
+                    "Sub-quadratic sparse and linear attention approximations.",
+                    "Extending attention mechanisms to continuous image, video, and audio modalities.",
+                    "Developing streaming multi-head attention for low-latency speech decoding."
+                ]
+            },
+            "paper-sample-02": {
+                "research_problem": "When deeper networks converge, an accuracy degradation problem emerges: network depth increasing leads to accuracy saturation followed by rapid degradation caused by optimization difficulties.",
+                "objectives": [
+                    "Ease the optimization of ultra-deep convolutional networks.",
+                    "Enable robust convergence for networks exceeding 100 to 1000 layers.",
+                    "Significantly improve visual recognition benchmarks without parameter explosion."
+                ],
+                "methodology": "Deep residual learning framework introducing parameter-free identity shortcut connections F(x) + x that bypass stacked convolutional layers.",
+                "key_contributions": [
+                    "Formulated residual building blocks to alleviate vanishing and exploding gradients.",
+                    "Trained 152-layer ResNet, winning 1st place in ILSVRC 2015 Classification and COCO detection.",
+                    "Demonstrated that residual networks remain easy to optimize even as depth scales to 1202 layers."
+                ],
+                "results": "Achieved 3.57% top-5 error on ImageNet classification (surpassing human performance) and 28% relative mAP improvement on COCO.",
+                "limitations": [
+                    "High sequential depth increases latency on edge and mobile microcontrollers.",
+                    "Residual representations may exhibit feature redundancy in extremely deep configurations.",
+                    "Requires high batch sizes and GPU memory bandwidth during multi-stage backpropagation."
+                ],
+                "future_work": [
+                    "Multi-scale feature pyramid residual networks for dense scene segmentation.",
+                    "Structured channel pruning and quantization of residual blocks for micro-embedded devices.",
+                    "Investigating residual identity mappings in recurrent and reinforcement learning pipelines."
+                ]
+            },
+            "paper-sample-03": {
+                "research_problem": "Full fine-tuning of multi-billion parameter foundation models requires deploying and maintaining independent full-sized weight checkpoints for every task, creating prohibitive storage and serving overhead.",
+                "objectives": [
+                    "Reduce downstream fine-tuning parameter overhead by up to 10,000x.",
+                    "Eliminate inference latency overhead introduced by serial adapter layers.",
+                    "Retain or exceed empirical downstream task performance of full parameter fine-tuning."
+                ],
+                "methodology": "Parameter-efficient adaptation that freezes pretrained model weights W and injects trainable low-rank decomposition matrices Delta W = B * A with rank r << min(d, k).",
+                "key_contributions": [
+                    "Formulated Low-Rank Adaptation (LoRA), lowering trainable parameters by 10,000x and GPU VRAM by 3x.",
+                    "Zero latency penalty by folding adapter matrices Delta W directly into pretrained weights upon serving.",
+                    "Demonstrated that low intrinsic dimensionality allows rank r=4 to 8 to match full fine-tuning across GPT-3 175B."
+                ],
+                "results": "Matched or outperformed full fine-tuning across GLUE, WikiSQL, and SAMSum benchmarks while reducing checkpoint size from 350GB to 35MB.",
+                "limitations": [
+                    "Sensitivity to rank r and scaling factor alpha across diverse downstream task distributions.",
+                    "Serving multiple heterogeneous LoRA adapters within the same high-throughput inference batch is non-trivial.",
+                    "Cannot adapt foundational world knowledge if target task diverges radically from pretraining corpus."
+                ],
+                "future_work": [
+                    "Dynamic rank allocation (AdaLoRA) across individual attention and feedforward layers.",
+                    "Quantized Low-Rank Adaptation (QLoRA) for single consumer-grade GPU fine-tuning.",
+                    "Applying low-rank adaptation to multi-modal vision-language foundation models."
+                ]
+            }
+        }
+
         analysis_col = get_paper_analysis_col()
         for p in samples:
             await papers_col.insert_one(p)
             pid = p["_id"]
+            ana_data = sample_analyses.get(pid, {
+                "research_problem": f"Alleviating training instability and computational bottlenecks in {p['title']}.",
+                "objectives": ["Eliminate architectural bottlenecks.", "Demonstrate state-of-the-art benchmark performance."],
+                "methodology": "Deep neural architecture with residual connections and normalized layers.",
+                "key_contributions": ["Foundational architectural innovation.", "Empirical validation on benchmark datasets."],
+                "results": "Achieved significant improvements over baseline models.",
+                "limitations": ["Computational complexity under large-scale inputs.", "Hardware acceleration dependencies."],
+                "future_work": ["Efficiency optimizations.", "Edge deployment."]
+            })
             # Add analysis
             await analysis_col.insert_one({
                 "_id": f"analysis-{pid}",
                 "paper_id": pid,
                 "user_id": demo_uid,
                 "abstract": p["abstract"],
-                "research_problem": f"Alleviating training instability and computational bottlenecks in sequence and representation learning.",
-                "objectives": [
-                    "Eliminate sequential recurrence bottlenecks.",
-                    "Optimize gradient backpropagation through identity mapping shortcut connections.",
-                    "Demonstrate state-of-the-art benchmark performance with reduced FLOP requirements."
-                ],
-                "methodology": "Feed-forward attention modules coupled with layer normalization and residual connections.",
-                "key_contributions": [
-                    "Foundational architectural innovation adopted across modern AI backbones.",
-                    "Comprehensive ablation benchmarks verifying multi-head dimensional scaling.",
-                    "Theoretical proof of vanishing gradient mitigation."
-                ],
-                "results": "Achieved new state-of-the-art results on WMT 2014 translation and ImageNet top-1 classification.",
-                "limitations": [
-                    "Quadratic O(N^2) memory scaling relative to sequence length in raw dot-product attention.",
-                    "Requires specialized hardware tensor acceleration for optimal throughput."
-                ],
-                "future_work": [
-                    "Sub-quadratic linear attention approximations and state-space model hybrids.",
-                    "Dynamic quantization for resource-constrained edge deployments."
-                ],
+                "research_problem": ana_data["research_problem"],
+                "objectives": ana_data["objectives"],
+                "methodology": ana_data["methodology"],
+                "key_contributions": ana_data["key_contributions"],
+                "results": ana_data["results"],
+                "limitations": ana_data["limitations"],
+                "future_work": ana_data["future_work"],
                 "created_at": "2026-02-19T10:00:00"
             })
 

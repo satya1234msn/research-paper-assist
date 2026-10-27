@@ -14,25 +14,38 @@ class LocalCollection:
         self.filepath = filepath
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._loaded = False
+        self._last_mtime = 0.0
 
-    async def _ensure_loaded(self):
-        if not self._loaded:
+    def _sync_ensure_loaded(self):
+        try:
+            mtime = os.path.getmtime(self.filepath) if os.path.exists(self.filepath) else 0.0
+        except Exception:
+            mtime = 0.0
+        if not self._loaded or mtime > self._last_mtime:
             if os.path.exists(self.filepath):
                 try:
                     with open(self.filepath, "r", encoding="utf-8") as f:
                         data = json.load(f)
                         self._cache = {doc["_id"]: doc for doc in data if isinstance(doc, dict) and "_id" in doc}
+                        self._last_mtime = mtime
                 except Exception:
                     self._cache = {}
             else:
                 self._cache = {}
             self._loaded = True
 
+    async def _ensure_loaded(self):
+        self._sync_ensure_loaded()
+
     async def _persist(self):
         try:
             os.makedirs(os.path.dirname(self.filepath), exist_ok=True)
             with open(self.filepath, "w", encoding="utf-8") as f:
                 json.dump(list(self._cache.values()), f, default=str, indent=2)
+            try:
+                self._last_mtime = os.path.getmtime(self.filepath)
+            except Exception:
+                pass
         except Exception as e:
             print(f"Error persisting collection {self.name}: {e}")
 
@@ -74,8 +87,10 @@ class LocalCollection:
         return None
 
     class Cursor:
-        def __init__(self, docs: List[Dict[str, Any]]):
+        def __init__(self, docs: List[Dict[str, Any]], collection: Optional['LocalCollection'] = None, query: Optional[Dict[str, Any]] = None):
             self.docs = docs
+            self.collection = collection
+            self.query = query
             self._sort_key = None
             self._sort_reverse = False
             self._limit_val = None
@@ -99,7 +114,11 @@ class LocalCollection:
             return self
 
         async def to_list(self, length: Optional[int] = None) -> List[Dict[str, Any]]:
-            res = list(self.docs)
+            if self.collection is not None:
+                self.collection._sync_ensure_loaded()
+                res = [d for d in self.collection._cache.values() if self.collection._matches(d, self.query or {})]
+            else:
+                res = list(self.docs)
             if self._sort_key:
                 res.sort(key=lambda d: str(d.get(self._sort_key, "")), reverse=self._sort_reverse)
             if self._skip_val:
@@ -111,7 +130,11 @@ class LocalCollection:
 
         def __aiter__(self):
             self._iter_idx = 0
-            res = list(self.docs)
+            if self.collection is not None:
+                self.collection._sync_ensure_loaded()
+                res = [d for d in self.collection._cache.values() if self.collection._matches(d, self.query or {})]
+            else:
+                res = list(self.docs)
             if self._sort_key:
                 res.sort(key=lambda d: str(d.get(self._sort_key, "")), reverse=self._sort_reverse)
             if self._skip_val:
@@ -129,9 +152,10 @@ class LocalCollection:
             raise StopAsyncIteration
 
     def find(self, query: Dict[str, Any] = None) -> Cursor:
+        self._sync_ensure_loaded()
         query = query or {}
         matched = [d for d in self._cache.values() if self._matches(d, query)]
-        return self.Cursor(matched)
+        return self.Cursor(matched, collection=self, query=query)
 
     async def insert_one(self, doc: Dict[str, Any]):
         await self._ensure_loaded()
